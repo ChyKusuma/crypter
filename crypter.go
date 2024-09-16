@@ -64,12 +64,19 @@ func bytesToKeySHA512AES(salt []byte, keyData SecureString, count int, key, iv [
 
 // Set the key and IV from a passphrase using a key derivation method
 func (c *CCrypter) SetKeyFromPassphrase(keyData SecureString, salt []byte, rounds uint, derivationMethod uint) bool {
-	fmt.Printf("Rounds: %d, Salt Size: %d\n", rounds, len(salt))
-	if rounds < 1 || len(salt) != WALLET_CRYPTO_SALT_SIZE {
-		fmt.Printf("Invalid rounds (%d) or salt size (%d)\n", rounds, len(salt))
+	// Ensure salt is of correct size (16 bytes)
+	if len(salt) != WALLET_CRYPTO_SALT_SIZE {
+		fmt.Printf("Invalid salt size (%d)\n", len(salt))
 		return false
 	}
 
+	// Ensure a valid number of rounds
+	if rounds < 1 || rounds > 1000 { // Adjust maximum as needed
+		fmt.Printf("Invalid rounds (%d)\n", rounds)
+		return false
+	}
+
+	// Derivation using method 0 (SHA512+AES)
 	if derivationMethod == 0 {
 		n := bytesToKeySHA512AES(salt, keyData, int(rounds), c.vchKey, c.vchIV)
 		if n != WALLET_CRYPTO_KEY_SIZE {
