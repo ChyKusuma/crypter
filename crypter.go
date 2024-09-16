@@ -77,6 +77,9 @@ func (c *CCrypter) SetKeyFromPassphrase(keyData SecureString, salt []byte, round
 			c.memoryCleanse(c.vchIV)
 			return false // Derivation failed, return false
 		}
+	} else {
+		fmt.Printf("Unsupported derivation method %d\n", derivationMethod)
+		return false // Unsupported derivation method
 	}
 
 	c.fKeySet = true // Indicate that the key is set
