@@ -4,7 +4,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha512"
-	"fmt"
 	"math/big"
 )
 
@@ -39,33 +38,27 @@ type CCrypter struct {
 // Derives a key and IV from a passphrase using SHA-512 and AES
 func bytesToKeySHA512AES(salt []byte, keyData SecureString, count int, key, iv []byte) int {
 	if count == 0 || len(key) == 0 || len(iv) == 0 {
-		fmt.Println("Invalid input to bytesToKeySHA512AES")
-		return 0
+		return 0 // Invalid input, return 0
 	}
 
+	// Create a new SHA-512 hash
 	h := sha512.New()
-	h.Write([]byte(keyData))
-	h.Write(salt)
-	buf := h.Sum(nil)
+	h.Write([]byte(keyData)) // Write the key data to the hash
+	h.Write(salt)            // Write the salt to the hash
+	buf := h.Sum(nil)        // Get the hash sum
 
+	// Perform multiple iterations of hashing
 	for i := 1; i < count; i++ {
-		h.Reset()
-		h.Write(buf)
-		buf = h.Sum(nil)
+		h.Reset()        // Reset the hash
+		h.Write(buf)     // Write the previous hash result
+		buf = h.Sum(nil) // Get the new hash sum
 	}
 
-	fmt.Printf("Derived hash buffer size: %d\n", len(buf)) // Debugging log
-
-	// Ensure buf has enough bytes for both key and IV
-	if len(buf) < WALLET_CRYPTO_KEY_SIZE+WALLET_CRYPTO_IV_SIZE {
-		fmt.Println("Buffer too small for key and IV")
-		return 0
-	}
-
+	// Copy derived key and IV from the final hash result
 	copy(key, buf[:WALLET_CRYPTO_KEY_SIZE])
 	copy(iv, buf[WALLET_CRYPTO_KEY_SIZE:WALLET_CRYPTO_KEY_SIZE+WALLET_CRYPTO_IV_SIZE])
 
-	return WALLET_CRYPTO_KEY_SIZE
+	return WALLET_CRYPTO_KEY_SIZE // Return the size of the derived key
 }
 
 // Set the key and IV from a passphrase using a key derivation method
