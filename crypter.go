@@ -80,8 +80,10 @@ func (c *CCrypter) Encrypt(plaintext []byte) ([]byte, bool) {
 		return nil, false
 	}
 
-	if len(plaintext)%aes.BlockSize != 0 {
-		return nil, false // Ensure plaintext size is a multiple of block size
+	// Ensure plaintext length is a multiple of block size
+	padding := aes.BlockSize - (len(plaintext) % aes.BlockSize)
+	if padding > 0 {
+		plaintext = append(plaintext, make([]byte, padding)...)
 	}
 
 	block, err := aes.NewCipher(c.Key)
@@ -102,8 +104,9 @@ func (c *CCrypter) Decrypt(ciphertext []byte) ([]byte, bool) {
 		return nil, false
 	}
 
+	// Ensure ciphertext length is a multiple of block size
 	if len(ciphertext)%aes.BlockSize != 0 {
-		return nil, false // Ensure ciphertext size is a multiple of block size
+		return nil, false
 	}
 
 	block, err := aes.NewCipher(c.Key)
@@ -114,8 +117,15 @@ func (c *CCrypter) Decrypt(ciphertext []byte) ([]byte, bool) {
 	plaintext := make([]byte, len(ciphertext))
 	decrypter := cipher.NewCBCDecrypter(block, c.IV)
 	decrypter.CryptBlocks(plaintext, ciphertext)
-	memoryCleanse(ciphertext) // Clear ciphertext after decryption
 
+	// Remove padding
+	padding := plaintext[len(plaintext)-1]
+	if int(padding) > aes.BlockSize || padding > byte(len(plaintext)) {
+		return nil, false
+	}
+	plaintext = plaintext[:len(plaintext)-int(padding)]
+
+	memoryCleanse(ciphertext) // Clear ciphertext after decryption
 	return plaintext, true
 }
 
