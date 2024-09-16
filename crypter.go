@@ -4,7 +4,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha512"
-	"fmt"
 	"math/big"
 )
 
@@ -55,10 +54,6 @@ func bytesToKeySHA512AES(salt []byte, keyData SecureString, count int, key, iv [
 		buf = h.Sum(nil) // Get the new hash sum
 	}
 
-	// Debug: Print the derived key and IV
-	fmt.Printf("Derived Key: %x\n", buf[:WALLET_CRYPTO_KEY_SIZE])
-	fmt.Printf("Derived IV: %x\n", buf[WALLET_CRYPTO_KEY_SIZE:WALLET_CRYPTO_KEY_SIZE+WALLET_CRYPTO_IV_SIZE])
-
 	// Copy derived key and IV from the final hash result
 	copy(key, buf[:WALLET_CRYPTO_KEY_SIZE])
 	copy(iv, buf[WALLET_CRYPTO_KEY_SIZE:WALLET_CRYPTO_KEY_SIZE+WALLET_CRYPTO_IV_SIZE])
@@ -81,9 +76,6 @@ func (c *CCrypter) SetKeyFromPassphrase(keyData SecureString, salt []byte, round
 			return false // Derivation failed, return false
 		}
 	}
-
-	// Debug: Print the key and IV set status
-	fmt.Printf("Key set: %v, IV set: %v\n", c.vchKey, c.vchIV)
 
 	c.fKeySet = true // Indicate that the key is set
 	return true      // Return true on success
