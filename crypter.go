@@ -39,47 +39,49 @@ type CCrypter struct {
 // Derives a key and IV from a passphrase using SHA-512 and AES
 func bytesToKeySHA512AES(salt []byte, keyData SecureString, count int, key, iv []byte) int {
 	if count == 0 || len(key) == 0 || len(iv) == 0 {
-		return 0 // Invalid input, return 0
+		fmt.Println("Invalid input to bytesToKeySHA512AES")
+		return 0
 	}
 
-	// Create a new SHA-512 hash
 	h := sha512.New()
-	h.Write([]byte(keyData)) // Write the key data to the hash
-	h.Write(salt)            // Write the salt to the hash
-	buf := h.Sum(nil)        // Get the hash sum
+	h.Write([]byte(keyData))
+	h.Write(salt)
+	buf := h.Sum(nil)
 
-	// Perform multiple iterations of hashing
 	for i := 1; i < count; i++ {
-		h.Reset()        // Reset the hash
-		h.Write(buf)     // Write the previous hash result
-		buf = h.Sum(nil) // Get the new hash sum
+		h.Reset()
+		h.Write(buf)
+		buf = h.Sum(nil)
 	}
 
-	// Copy derived key and IV from the final hash result
+	fmt.Printf("Derived hash buffer size: %d\n", len(buf)) // Debugging log
+
+	// Ensure buf has enough bytes for both key and IV
+	if len(buf) < WALLET_CRYPTO_KEY_SIZE+WALLET_CRYPTO_IV_SIZE {
+		fmt.Println("Buffer too small for key and IV")
+		return 0
+	}
+
 	copy(key, buf[:WALLET_CRYPTO_KEY_SIZE])
 	copy(iv, buf[WALLET_CRYPTO_KEY_SIZE:WALLET_CRYPTO_KEY_SIZE+WALLET_CRYPTO_IV_SIZE])
 
-	return WALLET_CRYPTO_KEY_SIZE // Return the size of the derived key
+	return WALLET_CRYPTO_KEY_SIZE
 }
 
 // Set the key and IV from a passphrase using a key derivation method
 func (c *CCrypter) SetKeyFromPassphrase(keyData SecureString, salt []byte, rounds uint, derivationMethod uint) bool {
 	if rounds < 1 || len(salt) != WALLET_CRYPTO_SALT_SIZE {
-		fmt.Printf("Invalid rounds (%d) or salt size (%d)\n", rounds, len(salt))
 		return false // Invalid rounds or salt size, return false
 	}
 
+	// Use the specified key derivation method
 	if derivationMethod == 0 {
 		n := bytesToKeySHA512AES(salt, keyData, int(rounds), c.vchKey, c.vchIV)
 		if n != WALLET_CRYPTO_KEY_SIZE {
-			fmt.Printf("Key derivation failed. Expected key size %d, got %d\n", WALLET_CRYPTO_KEY_SIZE, n)
 			c.memoryCleanse(c.vchKey) // Cleanse memory on failure
 			c.memoryCleanse(c.vchIV)
 			return false // Derivation failed, return false
 		}
-	} else {
-		fmt.Printf("Unsupported derivation method %d\n", derivationMethod)
-		return false // Unsupported derivation method
 	}
 
 	c.fKeySet = true // Indicate that the key is set
