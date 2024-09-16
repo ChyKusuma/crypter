@@ -64,6 +64,7 @@ func bytesToKeySHA512AES(salt []byte, keyData SecureString, count int, key, iv [
 
 // Set the key and IV from a passphrase using a key derivation method
 func (c *CCrypter) SetKeyFromPassphrase(keyData SecureString, salt []byte, rounds uint, derivationMethod uint) bool {
+	fmt.Printf("Rounds: %d, Salt Size: %d\n", rounds, len(salt))
 	if rounds < 1 || len(salt) != WALLET_CRYPTO_SALT_SIZE {
 		fmt.Printf("Invalid rounds (%d) or salt size (%d)\n", rounds, len(salt))
 		return false
