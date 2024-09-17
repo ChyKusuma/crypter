@@ -1,239 +1,298 @@
 package crypter
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha512"
+	"errors"
 	"fmt"
+	"log"
 	"math/big"
 )
 
-// Constants defining sizes for cryptographic operations
 const (
-	WALLET_CRYPTO_KEY_SIZE  = 32            // Size of the cryptographic key
-	WALLET_CRYPTO_IV_SIZE   = 16            // Size of the Initialization Vector (IV) for AES
-	WALLET_CRYPTO_SALT_SIZE = 16            // Size of the salt used in key derivation
-	AES_BLOCKSIZE           = aes.BlockSize // Block size for AES encryption
+	WALLET_CRYPTO_KEY_SIZE = 32 // AES-256 uses 256-bit (32 bytes) key
+	WALLET_CRYPTO_IV_SIZE  = 16 // AES uses a 16-byte Initialization Vector (IV)
+	AES_BLOCKSIZE          = 16 // AES block size is 16 bytes
+	CSHA512OutputSize      = 64 // SHA-512 output is 64 bytes
 )
 
-// Type definitions for cryptographic operations and key management
-type SecureString string    // A secure string used for key derivation
-type CKeyingMaterial []byte // A type representing keying material (byte slice)
-type uint256 struct {       // A type representing a 256-bit unsigned integer using math/big
-	value *big.Int
-}
-
-type CPubKey struct{} // Placeholder for a public key type
-type CKey struct {
-	// CKey holds key data and methods to set and verify the key
-	data []byte // Key data
-}
-
-// Struct for cryptographic operations
+// CCrypter handles AES encryption and decryption with key and IV.
 type CCrypter struct {
-	vchKey  CKeyingMaterial // Key used for encryption/decryption
-	vchIV   CKeyingMaterial // IV used for encryption/decryption
-	fKeySet bool            // Flag indicating whether the key has been set
+	vchKey  []byte
+	vchIV   []byte
+	fKeySet bool
 }
 
-// Derives a key and IV from a passphrase using SHA-512 and AES
-func bytesToKeySHA512AES(salt []byte, keyData SecureString, count int, key, iv []byte) int {
-	if count == 0 || len(key) == 0 || len(iv) == 0 {
-		return 0 // Invalid input, return 0
+// Uint256 represents a 256-bit integer.
+type Uint256 struct {
+	bigInt *big.Int
+}
+
+// NewUint256 creates a new Uint256 from a byte slice.
+func NewUint256(b []byte) *Uint256 {
+	u := new(Uint256)
+	u.bigInt = new(big.Int).SetBytes(b)
+	return u
+}
+
+// ToBytes converts Uint256 to byte slice.
+func (u *Uint256) ToBytes() []byte {
+	return u.bigInt.Bytes()
+}
+
+// BytesToUint256 converts byte slice to Uint256.
+func BytesToUint256(b []byte) *Uint256 {
+	return NewUint256(b)
+}
+
+// Key Derivation Formula: K = SHA-512^count(keyData + salt)
+func (c *CCrypter) BytesToKeySHA512AES(salt, keyData []byte, count int) ([]byte, []byte, error) {
+	if count <= 0 || keyData == nil || salt == nil {
+		return nil, nil, errors.New("invalid parameters")
 	}
 
-	// Create a new SHA-512 hash
-	h := sha512.New()
-	h.Write([]byte(keyData)) // Write the key data to the hash
-	h.Write(salt)            // Write the salt to the hash
-	buf := h.Sum(nil)        // Get the hash sum
+	hash := sha512.New()
+	buf := make([]byte, CSHA512OutputSize)
 
-	// Perform multiple iterations of hashing
+	// First hash step: H0 = SHA-512(keyData + salt)
+	hash.Write(keyData)
+	hash.Write(salt)
+	copy(buf, hash.Sum(nil))
+
+	// Repeat hashing (key stretching): Hn = SHA-512(Hn-1)
 	for i := 1; i < count; i++ {
-		h.Reset()        // Reset the hash
-		h.Write(buf)     // Write the previous hash result
-		buf = h.Sum(nil) // Get the new hash sum
+		hash.Reset()
+		hash.Write(buf)
+		copy(buf, hash.Sum(nil))
 	}
 
-	// Copy derived key and IV from the final hash result
-	copy(key, buf[:WALLET_CRYPTO_KEY_SIZE])
-	copy(iv, buf[WALLET_CRYPTO_KEY_SIZE:WALLET_CRYPTO_KEY_SIZE+WALLET_CRYPTO_IV_SIZE])
+	// Split the final buffer into key and IV: key = first 32 bytes, IV = next 16 bytes
+	if len(buf) < WALLET_CRYPTO_KEY_SIZE+WALLET_CRYPTO_IV_SIZE {
+		return nil, nil, errors.New("buffer too small")
+	}
+	key := buf[:WALLET_CRYPTO_KEY_SIZE]
+	iv := buf[WALLET_CRYPTO_KEY_SIZE : WALLET_CRYPTO_KEY_SIZE+WALLET_CRYPTO_IV_SIZE]
 
-	return WALLET_CRYPTO_KEY_SIZE // Return the size of the derived key
+	// Zero out sensitive data from memory
+	memoryCleanse(buf)
+
+	return key, iv, nil
 }
 
-// Set the key and IV from a passphrase using a key derivation method
-func (c *CCrypter) SetKeyFromPassphrase(keyData SecureString, salt []byte, rounds uint, derivationMethod uint) bool {
-	// Ensure salt is of correct size (16 bytes)
-	if len(salt) != WALLET_CRYPTO_SALT_SIZE {
-		fmt.Printf("Invalid salt size (%d)\n", len(salt))
+// SetKeyFromPassphrase derives and sets encryption key from a passphrase.
+func (c *CCrypter) SetKeyFromPassphrase(keyData, salt []byte, rounds uint) bool {
+	if rounds < 1 || len(salt) != WALLET_CRYPTO_IV_SIZE {
+		log.Printf("Invalid rounds or salt length: rounds=%d, salt length=%d", rounds, len(salt))
 		return false
 	}
 
-	// Ensure a valid number of rounds
-	if rounds < 1 || rounds > 1000 { // Adjust maximum as needed
-		fmt.Printf("Invalid rounds (%d)\n", rounds)
+	// Use BytesToKeySHA512AES to derive the key and IV.
+	key, iv, err := c.BytesToKeySHA512AES(salt, keyData, int(rounds))
+	if err != nil {
+		log.Printf("Error deriving key and IV: %v", err)
 		return false
 	}
 
-	// Derivation using method 0 (SHA512+AES)
-	if derivationMethod == 0 {
-		n := bytesToKeySHA512AES(salt, keyData, int(rounds), c.vchKey, c.vchIV)
-		if n != WALLET_CRYPTO_KEY_SIZE {
-			fmt.Println("Key derivation failed")
-			c.memoryCleanse(c.vchKey)
-			c.memoryCleanse(c.vchIV)
-			return false
-		}
+	if len(key) != WALLET_CRYPTO_KEY_SIZE || len(iv) != WALLET_CRYPTO_IV_SIZE {
+		log.Printf("Derived key or IV length mismatch: key length=%d, iv length=%d", len(key), len(iv))
+		memoryCleanse(key)
+		memoryCleanse(iv)
+		return false
 	}
 
-	fmt.Printf("Derived Key: %x\n", c.vchKey)
-	fmt.Printf("Derived IV: %x\n", c.vchIV)
+	// Set the derived key and IV.
+	c.vchKey = key
+	c.vchIV = iv
+	c.fKeySet = true
+	return true
+}
+
+// SetKey sets encryption key and IV directly.
+func (c *CCrypter) SetKey(newKey, newIV []byte) bool {
+	if len(newKey) != WALLET_CRYPTO_KEY_SIZE || len(newIV) != WALLET_CRYPTO_IV_SIZE {
+		return false
+	}
+
+	c.vchKey = make([]byte, WALLET_CRYPTO_KEY_SIZE)
+	c.vchIV = make([]byte, WALLET_CRYPTO_IV_SIZE)
+	copy(c.vchKey, newKey)
+	copy(c.vchIV, newIV)
 
 	c.fKeySet = true
 	return true
 }
 
-// Set the key and IV directly
-func (c *CCrypter) SetKey(newKey CKeyingMaterial, newIV []byte) bool {
-	if len(newKey) != WALLET_CRYPTO_KEY_SIZE || len(newIV) != WALLET_CRYPTO_IV_SIZE {
-		return false // Invalid key or IV size, return false
-	}
-
-	copy(c.vchKey, newKey) // Copy the new key
-	copy(c.vchIV, newIV)   // Copy the new IV
-
-	c.fKeySet = true // Indicate that the key is set
-	return true      // Return true on success
-}
-
-// Encrypt plaintext using AES with CBC mode
-func (c *CCrypter) Encrypt(plaintext CKeyingMaterial) ([]byte, bool) {
+// AES Encryption Formula: C = AES-256_CBC(K, P), where K is the key, P is the plaintext, and C is the ciphertext.
+func (c *CCrypter) Encrypt(plaintext []byte) ([]byte, error) {
 	if !c.fKeySet {
-		return nil, false // Key not set, return false
+		return nil, errors.New("key not set")
 	}
 
-	ciphertext := make([]byte, len(plaintext)+AES_BLOCKSIZE) // Allocate buffer for ciphertext
+	// Padding (PKCS7)
+	padLength := AES_BLOCKSIZE - (len(plaintext) % AES_BLOCKSIZE)
+	paddedPlaintext := append(plaintext, bytes.Repeat([]byte{byte(padLength)}, padLength)...)
 
-	block, err := aes.NewCipher(c.vchKey) // Create a new AES cipher with the key
+	// Generate a new IV
+	iv := make([]byte, WALLET_CRYPTO_IV_SIZE)
+	if _, err := rand.Read(iv); err != nil {
+		return nil, err
+	}
+
+	ciphertext := make([]byte, len(paddedPlaintext))
+
+	// Create AES cipher block with the derived key
+	block, err := aes.NewCipher(c.vchKey)
 	if err != nil {
-		return nil, false // Error creating cipher, return false
+		return nil, err
 	}
 
-	mode := cipher.NewCBCEncrypter(block, c.vchIV) // Create a CBC encrypter
-	mode.CryptBlocks(ciphertext, plaintext)        // Encrypt the plaintext
-	return ciphertext[:len(plaintext)], true       // Return the ciphertext and true on success
+	// CBC mode encryption: C = AES-CBC(K, IV, PaddedPlaintext)
+	enc := cipher.NewCBCEncrypter(block, iv)
+	enc.CryptBlocks(ciphertext, paddedPlaintext)
+
+	// Prepend the IV to the ciphertext
+	result := append(iv, ciphertext...)
+
+	return result, nil
 }
 
-// Decrypt ciphertext using AES with CBC mode
-func (c *CCrypter) Decrypt(ciphertext []byte) (CKeyingMaterial, bool) {
+// AES Decryption Formula: P = AES-256_CBC(K, C), where K is the key, C is the ciphertext, and P is the plaintext.
+func (c *CCrypter) Decrypt(ciphertext []byte) ([]byte, error) {
 	if !c.fKeySet {
-		return nil, false // Key not set, return false
+		return nil, errors.New("key not set")
 	}
 
-	plaintext := make([]byte, len(ciphertext)) // Allocate buffer for plaintext
+	if len(ciphertext) < WALLET_CRYPTO_IV_SIZE {
+		return nil, errors.New("ciphertext too short")
+	}
 
-	block, err := aes.NewCipher(c.vchKey) // Create a new AES cipher with the key
+	// Extract IV from the beginning of the ciphertext
+	iv := ciphertext[:WALLET_CRYPTO_IV_SIZE]
+	ciphertext = ciphertext[WALLET_CRYPTO_IV_SIZE:]
+
+	plaintext := make([]byte, len(ciphertext))
+
+	// Create AES cipher block with the derived key
+	block, err := aes.NewCipher(c.vchKey)
 	if err != nil {
-		return nil, false // Error creating cipher, return false
+		return nil, err
 	}
 
-	mode := cipher.NewCBCDecrypter(block, c.vchIV) // Create a CBC decrypter
-	mode.CryptBlocks(plaintext, ciphertext)        // Decrypt the ciphertext
-	return plaintext, true                         // Return the plaintext and true on success
+	// CBC mode decryption: P = AES-CBC(K, IV, C)
+	dec := cipher.NewCBCDecrypter(block, iv)
+	dec.CryptBlocks(plaintext, ciphertext)
+
+	// Remove padding (PKCS7)
+	padLength := int(plaintext[len(plaintext)-1])
+	if padLength > 0 && padLength <= AES_BLOCKSIZE {
+		plaintext = plaintext[:len(plaintext)-padLength]
+	}
+
+	return plaintext, nil
 }
 
-// Encrypt a secret using a master key and an IV
-func EncryptSecret(masterKey CKeyingMaterial, plaintext CKeyingMaterial, iv uint256, ciphertext []byte) bool {
-	var cKeyCrypter CCrypter                         // Create a new CCrypter instance
-	chIV := iv.value.Bytes()[:WALLET_CRYPTO_IV_SIZE] // Extract the IV from the uint256
-
-	if !cKeyCrypter.SetKey(masterKey, chIV) {
-		return false // Failed to set the key, return false
+// EncryptSecret: Encrypts the given plaintext using a master key and an IV (Uint256)
+func EncryptSecret(masterKey []byte, plaintext []byte, iv *Uint256) ([]byte, error) {
+	ivBytes := iv.ToBytes() // Convert Uint256 IV to byte array
+	if len(ivBytes) != WALLET_CRYPTO_IV_SIZE {
+		return nil, errors.New("IV size mismatch")
 	}
 
-	encText, ok := cKeyCrypter.Encrypt(plaintext) // Encrypt the plaintext
-	if !ok {
-		return false // Encryption failed, return false
+	// Initialize the crypter with the key and IV
+	cKeyCrypter := CCrypter{
+		vchKey: make([]byte, WALLET_CRYPTO_KEY_SIZE),
+		vchIV:  ivBytes, // Set the IV for encryption
 	}
 
-	if len(ciphertext) < len(encText) {
-		return false // Buffer too small, return false
+	// Set the encryption key and IV for AES
+	if !cKeyCrypter.SetKey(masterKey, cKeyCrypter.vchIV) {
+		return nil, errors.New("failed to set key")
 	}
 
-	copy(ciphertext, encText) // Copy the encrypted text to the output buffer
-	return true               // Return true on success
+	// Encrypt the secret using AES-256-CBC with the provided key and IV
+	ciphertext, err := cKeyCrypter.Encrypt(plaintext)
+	if err != nil {
+		return nil, err
+	}
+
+	return ciphertext, nil
 }
 
-// Decrypt a secret using a master key and an IV
-func DecryptSecret(masterKey CKeyingMaterial, ciphertext []byte, iv uint256, plaintext []byte) bool {
-	var cKeyCrypter CCrypter                         // Create a new CCrypter instance
-	chIV := iv.value.Bytes()[:WALLET_CRYPTO_IV_SIZE] // Extract the IV from the uint256
-
-	if !cKeyCrypter.SetKey(masterKey, chIV) {
-		return false // Failed to set the key, return false
+// DecryptSecret: Decrypts the ciphertext using a master key and an IV (Uint256)
+func DecryptSecret(masterKey []byte, ciphertext []byte, iv *Uint256) ([]byte, error) {
+	ivBytes := iv.ToBytes() // Convert Uint256 IV to byte array
+	if len(ivBytes) != WALLET_CRYPTO_IV_SIZE {
+		return nil, errors.New("IV size mismatch")
 	}
 
-	decrypted, ok := cKeyCrypter.Decrypt(ciphertext) // Decrypt the ciphertext
-	if !ok {
-		return false // Decryption failed, return false
+	// Initialize the crypter with the key and IV
+	cKeyCrypter := CCrypter{
+		vchKey: make([]byte, WALLET_CRYPTO_KEY_SIZE),
+		vchIV:  ivBytes, // Set the IV for decryption
 	}
 
-	if len(plaintext) < len(decrypted) {
-		return false // Buffer too small, return false
+	// Set the decryption key and IV for AES
+	if !cKeyCrypter.SetKey(masterKey, cKeyCrypter.vchIV) {
+		return nil, errors.New("failed to set key")
 	}
 
-	copy(plaintext, decrypted) // Copy the decrypted text to the output buffer
-	return true                // Return true on success
+	// Decrypt the ciphertext using AES-256-CBC with the provided key and IV
+	plaintext, err := cKeyCrypter.Decrypt(ciphertext)
+	if err != nil {
+		return nil, err
+	}
+
+	return plaintext, nil
 }
 
-// Decrypt a key from a master key and an encrypted secret
-func DecryptKey(masterKey CKeyingMaterial, cryptedSecret []byte, pubKey CPubKey) (CKey, bool) {
-	// Allocate a buffer for the plaintext
-	plaintext := make([]byte, len(cryptedSecret))
+// DecryptKey: Decrypts a crypted secret using a master key and IV derived from the public key
+func DecryptKey(masterKey []byte, cryptedSecret []byte, pubKey []byte) ([]byte, error) {
+	// Convert pubKey to Uint256 (used as the IV)
+	iv := BytesToUint256(pubKey)
 
-	// Call DecryptSecret with the buffer for plaintext
-	ok := DecryptSecret(masterKey, cryptedSecret, pubKey.GetHash(), plaintext)
-	if !ok {
-		return CKey{}, false // Decryption failed, return an empty key and false
+	// Decrypt the secret using the master key and derived IV
+	secret, err := DecryptSecret(masterKey, cryptedSecret, iv)
+	if err != nil {
+		return nil, err
 	}
 
-	if len(plaintext) != 32 {
-		return CKey{}, false // Secret length is not 32 bytes, return an empty key and false
+	if len(secret) != 32 {
+		return nil, errors.New("decrypted secret size mismatch")
 	}
 
-	var key CKey                              // Create a new CKey instance
-	key.Set(plaintext, pubKey.IsCompressed()) // Set the key data
-	if !key.VerifyPubKey(pubKey) {
-		return CKey{}, false // Public key verification failed, return an empty key and false
+	// Verify that the decrypted secret matches the public key
+	if !VerifyPubKey(secret, pubKey) {
+		return nil, errors.New("decrypted key mismatch with public key")
 	}
 
-	return key, true // Return the key and true on success
+	return secret, nil
 }
 
-// Cleanse memory by setting all bytes to zero
-func (c *CCrypter) memoryCleanse(data CKeyingMaterial) {
+// MemoryCleanse: Zero out sensitive data from memory
+func memoryCleanse(data []byte) {
 	for i := range data {
-		data[i] = 0 // Set each byte to zero
+		data[i] = 0
 	}
 }
 
-// Placeholder method for CPubKey to get the hash
-func (p *CPubKey) GetHash() uint256 {
-	return uint256{value: new(big.Int)} // Placeholder implementation
+// VerifyPubKey: Dummy verification for now
+func VerifyPubKey(secret, pubKey []byte) bool {
+	// Dummy implementation, assumes pubKey derived from secret
+	return bytes.Equal(secret, pubKey)
 }
 
-// Placeholder method for CPubKey to check if the key is compressed
-func (p *CPubKey) IsCompressed() bool {
-	return false // Placeholder implementation
-}
-
-// Placeholder method for CKey to set key data
-func (k *CKey) Set(data []byte, compressed bool) {
-	k.data = data // Set the key data
-}
-
-// Placeholder method for CKey to verify public key
-func (k *CKey) VerifyPubKey(pubKey CPubKey) bool {
-	return true // Placeholder implementation
+// Modify GenerateRandomBytes to accept an appropriate size for IV and Key
+func GenerateRandomBytes(size int) ([]byte, error) {
+	if size <= 0 {
+		return nil, errors.New("size must be greater than 0")
+	}
+	b := make([]byte, size)
+	_, err := rand.Read(b)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
 }
