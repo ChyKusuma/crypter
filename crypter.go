@@ -44,8 +44,11 @@ func (u *Uint256) ToBytes() []byte {
 }
 
 // BytesToUint256 converts byte slice to Uint256.
+// Convert a byte slice to Uint256
 func BytesToUint256(b []byte) *Uint256 {
-	return NewUint256(b)
+	u := new(Uint256)
+	u.bigInt = new(big.Int).SetBytes(b)
+	return u
 }
 
 // Key Derivation Formula: K = SHA-512^count(keyData + salt)
@@ -195,7 +198,7 @@ func (c *CCrypter) Decrypt(ciphertext []byte) ([]byte, error) {
 }
 
 // EncryptSecret: Encrypts the given plaintext using a master key and an IV (Uint256)
-func EncryptSecret(masterKey []byte, plaintext []byte, iv *Uint256) ([]byte, error) {
+func EncryptSecret(masterKey []byte, plaintext []byte, iv *Uint256) ([]byte, error)
 	ivBytes := iv.ToBytes() // Convert Uint256 IV to byte array
 	if len(ivBytes) != WALLET_CRYPTO_IV_SIZE {
 		return nil, errors.New("IV size mismatch")
