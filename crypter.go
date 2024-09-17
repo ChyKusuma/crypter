@@ -198,7 +198,7 @@ func (c *CCrypter) Decrypt(ciphertext []byte) ([]byte, error) {
 }
 
 // EncryptSecret: Encrypts the given plaintext using a master key and an IV (Uint256)
-func EncryptSecret(masterKey []byte, plaintext []byte, iv *Uint256) ([]byte, error)
+func EncryptSecret(masterKey []byte, plaintext []byte, iv *Uint256) ([]byte, error) {
 	ivBytes := iv.ToBytes() // Convert Uint256 IV to byte array
 	if len(ivBytes) != WALLET_CRYPTO_IV_SIZE {
 		return nil, errors.New("IV size mismatch")
