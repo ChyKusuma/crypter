@@ -92,7 +92,6 @@ func (c *CCrypter) SetKeyFromPassphrase(keyData, salt []byte, rounds uint) bool 
 		return false
 	}
 
-	// Use BytesToKeySHA512AES to derive the key and IV.
 	key, iv, err := c.BytesToKeySHA512AES(salt, keyData, int(rounds))
 	if err != nil {
 		log.Printf("Error deriving key and IV: %v", err)
@@ -106,7 +105,6 @@ func (c *CCrypter) SetKeyFromPassphrase(keyData, salt []byte, rounds uint) bool 
 		return false
 	}
 
-	// Set the derived key and IV.
 	c.vchKey = key
 	c.vchIV = iv
 	c.fKeySet = true
