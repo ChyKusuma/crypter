@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha512"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -19,11 +20,39 @@ const (
 	CSHA512OutputSize      = 64 // SHA-512 output is 64 bytes
 )
 
+// MasterKey represents the master key structure.
+type MasterKey struct {
+	VchCryptedKey                []byte `json:"vchCryptedKey"`
+	VchSalt                      []byte `json:"vchSalt"`
+	NDerivationMethod            uint32 `json:"nDerivationMethod"`
+	NDeriveIterations            uint32 `json:"nDeriveIterations"`
+	VchOtherDerivationParameters []byte `json:"vchOtherDerivationParameters"`
+}
+
 // CCrypter handles AES encryption and decryption with key and IV.
 type CCrypter struct {
 	vchKey  []byte
 	vchIV   []byte
 	fKeySet bool
+}
+
+// NewMasterKey creates a new instance of MasterKey with default values.
+func NewMasterKey() *MasterKey {
+	return &MasterKey{
+		NDeriveIterations:            25000,    // Default iterations
+		NDerivationMethod:            0,        // Default method (0 = EVP_sha512)
+		VchOtherDerivationParameters: []byte{}, // Empty default
+	}
+}
+
+// Serialize serializes the MasterKey into a byte slice.
+func (mk *MasterKey) Serialize() ([]byte, error) {
+	return json.Marshal(mk)
+}
+
+// Deserialize populates the MasterKey from a byte slice.
+func (mk *MasterKey) Deserialize(data []byte) error {
+	return json.Unmarshal(data, mk)
 }
 
 // Uint256 represents a 256-bit integer.
@@ -76,8 +105,8 @@ func (c *CCrypter) BytesToKeySHA512AES(salt, keyData []byte, count int) ([]byte,
 	if len(buf) < WALLET_CRYPTO_KEY_SIZE+WALLET_CRYPTO_IV_SIZE {
 		return nil, nil, errors.New("buffer too small")
 	}
-	key := buf[:WALLET_CRYPTO_KEY_SIZE]
-	iv := buf[WALLET_CRYPTO_KEY_SIZE : WALLET_CRYPTO_KEY_SIZE+WALLET_CRYPTO_IV_SIZE]
+	key := buf[:WALLET_CRYPTO_KEY_SIZE]                                              // First 32 bytes for key
+	iv := buf[WALLET_CRYPTO_KEY_SIZE : WALLET_CRYPTO_KEY_SIZE+WALLET_CRYPTO_IV_SIZE] // Next 16 bytes for IV
 
 	// Zero out sensitive data from memory
 	memoryCleanse(buf)
@@ -296,4 +325,88 @@ func GenerateRandomBytes(size int) ([]byte, error) {
 		return nil, err
 	}
 	return b, nil
+}
+
+func main() {
+	mk := NewMasterKey()
+	mk.VchCryptedKey = []byte("example_crypted_key")
+	mk.VchSalt = []byte("example_salt")
+
+	// Print before serialization
+	fmt.Printf("MasterKey before serialization: %+v\n", mk)
+
+	// Serialize
+	serialized, err := mk.Serialize()
+	if err != nil {
+		log.Fatalf("Error during serialization: %v", err)
+	}
+	fmt.Printf("Serialized MasterKey: %s\n", string(serialized))
+
+	// Deserialize
+	newMk := NewMasterKey()
+	if err := newMk.Deserialize(serialized); err != nil {
+		log.Fatalf("Error during deserialization: %v", err)
+	}
+	fmt.Printf("MasterKey after deserialization: %+v\n", newMk)
+
+	// Create a new CCrypter instance
+	crypt := &CCrypter{}
+
+	// Generate random key data and salt
+	keyData, err := GenerateRandomBytes(WALLET_CRYPTO_KEY_SIZE)
+	if err != nil {
+		log.Fatalf("Failed to generate key data: %v", err)
+	}
+	salt, err := GenerateRandomBytes(WALLET_CRYPTO_IV_SIZE) // Ensure salt size is correct
+	if err != nil {
+		log.Fatalf("Failed to generate salt: %v", err)
+	}
+
+	// Log generated values for debugging
+	fmt.Printf("Generated keyData: %x\n", keyData)
+	fmt.Printf("Generated salt: %x\n", salt)
+
+	// Set the key using the key data and salt
+	if !crypt.SetKeyFromPassphrase(keyData, salt, 1000) {
+		log.Fatalf("Failed to set key from passphrase")
+	}
+
+	// Define some plaintext
+	plaintext := []byte("Hello, this is a secret message!")
+
+	// Encrypt the plaintext
+	ciphertext, err := crypt.Encrypt(plaintext)
+	if err != nil {
+		log.Fatalf("Failed to encrypt plaintext: %v", err)
+	}
+	fmt.Printf("Ciphertext: %x\n", ciphertext)
+
+	// Decrypt the ciphertext
+	decryptedText, err := crypt.Decrypt(ciphertext)
+	if err != nil {
+		log.Fatalf("Failed to decrypt ciphertext: %v", err)
+	}
+	fmt.Printf("Decrypted text: %s\n", decryptedText)
+
+	// Create a Uint256 IV (must be 16 bytes for AES)
+	ivBytes, err := GenerateRandomBytes(WALLET_CRYPTO_IV_SIZE) // 16 bytes
+	if err != nil {
+		log.Fatalf("Failed to generate IV: %v", err)
+	}
+	iv := BytesToUint256(ivBytes)
+
+	// Encrypt a secret
+	secret := []byte("This is a secret key!")
+	encryptedSecret, err := EncryptSecret(keyData, secret, iv)
+	if err != nil {
+		log.Fatalf("Failed to encrypt secret: %v", err)
+	}
+	fmt.Printf("Encrypted secret: %x\n", encryptedSecret)
+
+	// Decrypt the secret
+	decryptedSecret, err := DecryptSecret(keyData, encryptedSecret, iv)
+	if err != nil {
+		log.Fatalf("Failed to decrypt secret: %v", err)
+	}
+	fmt.Printf("Decrypted secret: %s\n", decryptedSecret)
 }
